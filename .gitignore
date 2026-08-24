@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Environment secrets
+.env
+
+# Logs (rotating file handler output — see plugins/common/logger.py)
+logs/
+*.log
+
+# Airflow runtime artifacts
+airflow.db
+airflow-webserver.pid
+standalone_admin_password.txt
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Project docs kept local only
+IMPLEMENTATION_PLAN.md
+
+# Raw dataset (large, obtained from Kaggle) — kept on disk, not in git history
+include/data/*.csv

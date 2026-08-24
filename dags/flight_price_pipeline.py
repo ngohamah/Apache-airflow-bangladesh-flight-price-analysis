@@ -2,19 +2,31 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pendulum
 from airflow.decorators import dag, task
 
+# Transient DB-connection hiccups are worth retrying; a real validation/transform
+# bug should surface immediately instead of being retried away silently.
+DB_IO_RETRY_KWARGS = {"retries": 2, "retry_delay": timedelta(minutes=1)}
+
 from plugins.common.config import (
+    ANALYTICS_CLEAN_TABLE,
     CSV_FILE,
+    KPI_AVG_FARE_BY_AIRLINE_TABLE,
+    KPI_BOOKINGS_BY_AIRLINE_TABLE,
+    KPI_SEASONAL_VARIATION_TABLE,
+    KPI_TOP_ROUTES_TABLE,
     SQL_DIR,
     STAGING_RAW_TABLE,
     STAGING_REJECTED_TABLE,
 )
-from plugins.common.db import get_mysql_connection
+from plugins.common.db import get_mysql_connection, get_postgres_connection
 from plugins.common.logger import get_logger
 from plugins.common.sql_io import delete_rows_by_id, fetch_batch
-from plugins.tasks.ingest import bulk_insert, prepare_for_staging, read_csv
+from plugins.tasks.ingest import STAGING_COLUMNS, bulk_insert, prepare_for_staging, read_csv
+from plugins.tasks.load import delete_then_insert, tag_batch
 from plugins.tasks.schema import apply_ddl
 from plugins.tasks.transform import (
     compute_avg_fare_by_airline,
@@ -50,7 +62,7 @@ def flight_price_pipeline():
         finally:
             connection.close()
 
-    @task()
+    @task(**DB_IO_RETRY_KWARGS)
     def ingest_csv_to_mysql(run_id: str) -> None:
         connection = get_mysql_connection()
         try:
@@ -173,6 +185,39 @@ def flight_price_pipeline():
         finally:
             connection.close()
 
+    @task(**DB_IO_RETRY_KWARGS)
+    def load_to_postgres(
+        avg_fare: list[dict],
+        seasonal: list[dict],
+        bookings: list[dict],
+        top_routes: list[dict],
+        run_id: str,
+    ) -> None:
+        mysql_connection = get_mysql_connection()
+        postgres_connection = get_postgres_connection()
+        try:
+            clean_df = fetch_batch(mysql_connection, STAGING_RAW_TABLE, batch_id=run_id)
+            clean_df = clean_df[["batch_id", *STAGING_COLUMNS]]
+
+            loads = {
+                ANALYTICS_CLEAN_TABLE: clean_df,
+                KPI_AVG_FARE_BY_AIRLINE_TABLE: tag_batch(avg_fare, run_id),
+                KPI_SEASONAL_VARIATION_TABLE: tag_batch(seasonal, run_id),
+                KPI_BOOKINGS_BY_AIRLINE_TABLE: tag_batch(bookings, run_id),
+                KPI_TOP_ROUTES_TABLE: tag_batch(top_routes, run_id),
+            }
+            for table_name, df in loads.items():
+                inserted = delete_then_insert(postgres_connection, table_name, run_id, df)
+                logger.info(
+                    "Loaded %d row(s) into %s (batch_id=%s)", inserted, table_name, run_id
+                )
+        except Exception:
+            logger.exception("Failed loading batch %s into Postgres", run_id)
+            raise
+        finally:
+            mysql_connection.close()
+            postgres_connection.close()
+
     staging = create_staging_tables()
     ingest = ingest_csv_to_mysql()
     validate = validate_and_quarantine()
@@ -183,7 +228,11 @@ def flight_price_pipeline():
     bookings = kpi_bookings_by_airline()
     top_routes = kpi_top_routes()
 
-    staging >> ingest >> validate >> transform >> [avg_fare, seasonal, bookings, top_routes]
+    load = load_to_postgres(
+        avg_fare=avg_fare, seasonal=seasonal, bookings=bookings, top_routes=top_routes
+    )
+
+    staging >> ingest >> validate >> transform >> [avg_fare, seasonal, bookings, top_routes] >> load
 
 
 flight_price_pipeline()

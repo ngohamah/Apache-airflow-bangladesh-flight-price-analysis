@@ -21,6 +21,7 @@ standalone_admin_password.txt
 .DS_Store
 .vscode/
 .idea/
+.claude/
 
 # Project docs kept local only
 IMPLEMENTATION_PLAN.md

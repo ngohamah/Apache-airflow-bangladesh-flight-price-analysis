@@ -1,0 +1,128 @@
+x-airflow-common: &airflow-common
+  build: .
+  image: dem06-airflow:2.9.3
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DEFAULT_TIMEZONE: utc
+    PYTHONPATH: /opt/airflow
+    MYSQL_HOST: mysql
+    MYSQL_PORT: 3306
+    MYSQL_DATABASE: ${MYSQL_DATABASE:-staging}
+    MYSQL_USER: ${MYSQL_USER:-airflow}
+    MYSQL_PASSWORD: ${MYSQL_PASSWORD:-airflow}
+    POSTGRES_ANALYTICS_HOST: postgres-analytics
+    POSTGRES_ANALYTICS_PORT: 5432
+    POSTGRES_ANALYTICS_DB: ${POSTGRES_ANALYTICS_DB:-analytics}
+    POSTGRES_ANALYTICS_USER: ${POSTGRES_ANALYTICS_USER:-airflow}
+    POSTGRES_ANALYTICS_PASSWORD: ${POSTGRES_ANALYTICS_PASSWORD:-airflow}
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./plugins:/opt/airflow/plugins
+    - ./include:/opt/airflow/include
+    - ./logs:/opt/airflow/logs
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on: &airflow-common-depends-on
+    postgres:
+      condition: service_healthy
+    mysql:
+      condition: service_healthy
+    postgres-analytics:
+      condition: service_healthy
+
+services:
+  # --- Airflow metadata DB -----------------------------------------------------
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-airflow-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 5
+
+  # --- Staging DB ---------------------------------------------------------------
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-staging}
+      MYSQL_USER: ${MYSQL_USER:-airflow}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-airflow}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-root}"]
+      interval: 5s
+      retries: 10
+
+  # --- Analytics DB ---------------------------------------------------------------
+  postgres-analytics:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_ANALYTICS_USER:-airflow}
+      POSTGRES_PASSWORD: ${POSTGRES_ANALYTICS_PASSWORD:-airflow}
+      POSTGRES_DB: ${POSTGRES_ANALYTICS_DB:-analytics}
+    volumes:
+      - postgres-analytics-data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_ANALYTICS_USER:-airflow}"]
+      interval: 5s
+      retries: 5
+
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username admin --password admin \
+          --firstname Admin --lastname User \
+          --role Admin --email admin@example.com
+        airflow connections add 'mysql_staging' \
+          --conn-type 'mysql' \
+          --conn-host 'mysql' \
+          --conn-schema "${MYSQL_DATABASE:-staging}" \
+          --conn-login "${MYSQL_USER:-airflow}" \
+          --conn-password "${MYSQL_PASSWORD:-airflow}" \
+          --conn-port '3306' || true
+        airflow connections add 'postgres_analytics' \
+          --conn-type 'postgres' \
+          --conn-host 'postgres-analytics' \
+          --conn-schema "${POSTGRES_ANALYTICS_DB:-analytics}" \
+          --conn-login "${POSTGRES_ANALYTICS_USER:-airflow}" \
+          --conn-password "${POSTGRES_ANALYTICS_PASSWORD:-airflow}" \
+          --conn-port '5432' || true
+    depends_on: *airflow-common-depends-on
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8080:8080"
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+volumes:
+  postgres-airflow-data:
+  postgres-analytics-data:
+  mysql-data:

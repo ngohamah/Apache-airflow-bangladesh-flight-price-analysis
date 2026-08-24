@@ -5,11 +5,18 @@ from __future__ import annotations
 import pendulum
 from airflow.decorators import dag, task
 
-from plugins.common.config import CSV_FILE, SQL_DIR, STAGING_RAW_TABLE
+from plugins.common.config import (
+    CSV_FILE,
+    SQL_DIR,
+    STAGING_RAW_TABLE,
+    STAGING_REJECTED_TABLE,
+)
 from plugins.common.db import get_mysql_connection
 from plugins.common.logger import get_logger
+from plugins.common.sql_io import delete_rows_by_id, fetch_batch
 from plugins.tasks.ingest import bulk_insert, prepare_for_staging, read_csv
 from plugins.tasks.schema import apply_ddl
+from plugins.tasks.validate import insert_rejected, split_valid_invalid
 
 logger = get_logger(__name__)
 
@@ -52,7 +59,35 @@ def flight_price_pipeline():
         finally:
             connection.close()
 
-    create_staging_tables() >> ingest_csv_to_mysql()
+    @task()
+    def validate_and_quarantine(run_id: str) -> None:
+        connection = get_mysql_connection()
+        try:
+            df = fetch_batch(connection, STAGING_RAW_TABLE, batch_id=run_id)
+            clean, rejected = split_valid_invalid(df)
+            logger.info(
+                "Validated %d rows for batch %s: %d clean, %d rejected",
+                len(df),
+                run_id,
+                len(clean),
+                len(rejected),
+            )
+            if not rejected.empty:
+                insert_rejected(connection, rejected, table_name=STAGING_REJECTED_TABLE)
+                delete_rows_by_id(connection, STAGING_RAW_TABLE, rejected["id"].tolist())
+                logger.info(
+                    "Quarantined %d row(s) into %s (reasons: %s)",
+                    len(rejected),
+                    STAGING_REJECTED_TABLE,
+                    rejected["rejection_reason"].value_counts().to_dict(),
+                )
+        except Exception:
+            logger.exception("Failed validating/quarantining batch %s", run_id)
+            raise
+        finally:
+            connection.close()
+
+    create_staging_tables() >> ingest_csv_to_mysql() >> validate_and_quarantine()
 
 
 flight_price_pipeline()

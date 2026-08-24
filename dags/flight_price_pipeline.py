@@ -16,6 +16,14 @@ from plugins.common.logger import get_logger
 from plugins.common.sql_io import delete_rows_by_id, fetch_batch
 from plugins.tasks.ingest import bulk_insert, prepare_for_staging, read_csv
 from plugins.tasks.schema import apply_ddl
+from plugins.tasks.transform import (
+    compute_avg_fare_by_airline,
+    compute_bookings_by_airline,
+    compute_seasonal_fare_variation,
+    compute_top_routes,
+    fill_total_fare,
+    update_total_fare,
+)
 from plugins.tasks.validate import insert_rejected, split_valid_invalid
 
 logger = get_logger(__name__)
@@ -87,7 +95,95 @@ def flight_price_pipeline():
         finally:
             connection.close()
 
-    create_staging_tables() >> ingest_csv_to_mysql() >> validate_and_quarantine()
+    @task()
+    def transform_add_total_fare(run_id: str) -> None:
+        connection = get_mysql_connection()
+        try:
+            df = fetch_batch(connection, STAGING_RAW_TABLE, batch_id=run_id)
+            transformed = fill_total_fare(df)
+            to_update = transformed.loc[
+                transformed["total_fare_corrected"], ["id", "total_fare"]
+            ]
+            if not to_update.empty:
+                update_total_fare(connection, STAGING_RAW_TABLE, to_update)
+                logger.info(
+                    "Recomputed total_fare for %d row(s) in batch %s", len(to_update), run_id
+                )
+            else:
+                logger.info("No total_fare corrections needed for batch %s", run_id)
+        except Exception:
+            logger.exception("Failed transforming batch %s", run_id)
+            raise
+        finally:
+            connection.close()
+
+    @task()
+    def kpi_avg_fare_by_airline(run_id: str) -> list[dict]:
+        connection = get_mysql_connection()
+        try:
+            df = fetch_batch(connection, STAGING_RAW_TABLE, batch_id=run_id)
+            result = compute_avg_fare_by_airline(df)
+            logger.info("Computed avg fare by airline: %d airline(s)", len(result))
+            return result.to_dict("records")
+        except Exception:
+            logger.exception("Failed computing avg fare by airline for batch %s", run_id)
+            raise
+        finally:
+            connection.close()
+
+    @task()
+    def kpi_seasonal_variation(run_id: str) -> list[dict]:
+        connection = get_mysql_connection()
+        try:
+            df = fetch_batch(connection, STAGING_RAW_TABLE, batch_id=run_id)
+            result = compute_seasonal_fare_variation(df)
+            logger.info("Computed seasonal fare variation: %d season(s)", len(result))
+            return result.to_dict("records")
+        except Exception:
+            logger.exception("Failed computing seasonal fare variation for batch %s", run_id)
+            raise
+        finally:
+            connection.close()
+
+    @task()
+    def kpi_bookings_by_airline(run_id: str) -> list[dict]:
+        connection = get_mysql_connection()
+        try:
+            df = fetch_batch(connection, STAGING_RAW_TABLE, batch_id=run_id)
+            result = compute_bookings_by_airline(df)
+            logger.info("Computed bookings by airline: %d airline(s)", len(result))
+            return result.to_dict("records")
+        except Exception:
+            logger.exception("Failed computing bookings by airline for batch %s", run_id)
+            raise
+        finally:
+            connection.close()
+
+    @task()
+    def kpi_top_routes(run_id: str) -> list[dict]:
+        connection = get_mysql_connection()
+        try:
+            df = fetch_batch(connection, STAGING_RAW_TABLE, batch_id=run_id)
+            result = compute_top_routes(df)
+            logger.info("Computed top routes: %d route(s)", len(result))
+            return result.to_dict("records")
+        except Exception:
+            logger.exception("Failed computing top routes for batch %s", run_id)
+            raise
+        finally:
+            connection.close()
+
+    staging = create_staging_tables()
+    ingest = ingest_csv_to_mysql()
+    validate = validate_and_quarantine()
+    transform = transform_add_total_fare()
+
+    avg_fare = kpi_avg_fare_by_airline()
+    seasonal = kpi_seasonal_variation()
+    bookings = kpi_bookings_by_airline()
+    top_routes = kpi_top_routes()
+
+    staging >> ingest >> validate >> transform >> [avg_fare, seasonal, bookings, top_routes]
 
 
 flight_price_pipeline()

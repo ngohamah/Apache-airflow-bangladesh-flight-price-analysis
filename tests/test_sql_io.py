@@ -11,9 +11,7 @@ def test_fetch_batch_builds_dataframe_from_cursor_description():
 
     df = fetch_batch(connection, "flights_raw", batch_id="b1")
 
-    cursor.execute.assert_called_once_with(
-        "SELECT * FROM flights_raw WHERE batch_id = %s", ("b1",)
-    )
+    cursor.execute.assert_called_once_with("SELECT * FROM flights_raw WHERE batch_id = %s", ("b1",))
     assert list(df.columns) == ["id", "batch_id", "airline"]
     assert df.iloc[1]["airline"] == "Novoair"
 
@@ -25,9 +23,7 @@ def test_delete_rows_by_id_executes_delete_with_placeholders():
 
     deleted = delete_rows_by_id(connection, "flights_raw", [10, 11])
 
-    cursor.execute.assert_called_once_with(
-        "DELETE FROM flights_raw WHERE id IN (%s, %s)", (10, 11)
-    )
+    cursor.execute.assert_called_once_with("DELETE FROM flights_raw WHERE id IN (%s, %s)", (10, 11))
     connection.commit.assert_called_once()
     assert deleted == 2
 

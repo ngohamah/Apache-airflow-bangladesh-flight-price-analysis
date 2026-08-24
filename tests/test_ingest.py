@@ -53,8 +53,6 @@ def test_bulk_insert_executes_once_with_all_rows_and_converts_nan_to_none():
     assert len(rows) == 2
     base_fare_index = list(prepared.columns).index("base_fare")
     assert rows[1][base_fare_index] is None  # NaN converted to NULL, not left as NaN
-    assert not any(
-        isinstance(value, float) and math.isnan(value) for row in rows for value in row
-    )
+    assert not any(isinstance(value, float) and math.isnan(value) for row in rows for value in row)
     connection.commit.assert_called_once()
     cursor.close.assert_called_once()

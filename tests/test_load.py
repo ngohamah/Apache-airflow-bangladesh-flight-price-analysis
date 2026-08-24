@@ -22,7 +22,10 @@ def test_delete_then_insert_deletes_then_inserts_and_commits():
     inserted = delete_then_insert(connection, "kpi_bookings_by_airline", "batch-123", df)
 
     assert inserted == 1
-    delete_call, insert_call = cursor.execute.call_args_list[0], cursor.executemany.call_args_list[0]
+    delete_call, insert_call = (
+        cursor.execute.call_args_list[0],
+        cursor.executemany.call_args_list[0],
+    )
     assert delete_call.args == (
         "DELETE FROM kpi_bookings_by_airline WHERE batch_id = %s",
         ("batch-123",),

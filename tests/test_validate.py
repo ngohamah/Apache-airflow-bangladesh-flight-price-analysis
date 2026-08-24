@@ -26,7 +26,9 @@ def _sample_df() -> pd.DataFrame:
 
 
 def test_coerce_numeric_turns_unparseable_values_into_nan():
-    df = pd.DataFrame({"base_fare": ["100", "not-a-number"], "tax_surcharge": [1, 2], "total_fare": [1, 2]})
+    df = pd.DataFrame(
+        {"base_fare": ["100", "not-a-number"], "tax_surcharge": [1, 2], "total_fare": [1, 2]}
+    )
 
     coerced = coerce_numeric(df)
 

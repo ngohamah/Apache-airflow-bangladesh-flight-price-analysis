@@ -1,4 +1,4 @@
-"""Flight Price Analysis pipeline: CSV -> MySQL staging -> validate/transform -> Postgres analytics."""
+"""Flight Price Analysis pipeline: CSV -> MySQL staging -> validate/transform -> Postgres."""
 
 from __future__ import annotations
 
@@ -6,10 +6,6 @@ from datetime import timedelta
 
 import pendulum
 from airflow.decorators import dag, task
-
-# Transient DB-connection hiccups are worth retrying; a real validation/transform
-# bug should surface immediately instead of being retried away silently.
-DB_IO_RETRY_KWARGS = {"retries": 2, "retry_delay": timedelta(minutes=1)}
 
 from plugins.common.config import (
     ANALYTICS_CLEAN_TABLE,
@@ -39,6 +35,10 @@ from plugins.tasks.transform import (
 from plugins.tasks.validate import insert_rejected, split_valid_invalid
 
 logger = get_logger(__name__)
+
+# Transient DB-connection hiccups are worth retrying; a real validation/transform
+# bug should surface immediately instead of being retried away silently.
+DB_IO_RETRY_KWARGS = {"retries": 2, "retry_delay": timedelta(minutes=1)}
 
 
 @dag(
@@ -113,9 +113,7 @@ def flight_price_pipeline():
         try:
             df = fetch_batch(connection, STAGING_RAW_TABLE, batch_id=run_id)
             transformed = fill_total_fare(df)
-            to_update = transformed.loc[
-                transformed["total_fare_corrected"], ["id", "total_fare"]
-            ]
+            to_update = transformed.loc[transformed["total_fare_corrected"], ["id", "total_fare"]]
             if not to_update.empty:
                 update_total_fare(connection, STAGING_RAW_TABLE, to_update)
                 logger.info(
@@ -208,9 +206,7 @@ def flight_price_pipeline():
             }
             for table_name, df in loads.items():
                 inserted = delete_then_insert(postgres_connection, table_name, run_id, df)
-                logger.info(
-                    "Loaded %d row(s) into %s (batch_id=%s)", inserted, table_name, run_id
-                )
+                logger.info("Loaded %d row(s) into %s (batch_id=%s)", inserted, table_name, run_id)
         except Exception:
             logger.exception("Failed loading batch %s into Postgres", run_id)
             raise

@@ -44,6 +44,28 @@ REQUIRED_COLUMNS = (
     "Seasonality",
 )
 
+# Raw CSV column -> flights_raw/flights_clean column. Order here fixes the column
+# order used when inserting into the staging table (see plugins/tasks/ingest.py).
+COLUMN_RENAME_MAP = {
+    "Airline": "airline",
+    "Source": "source",
+    "Source Name": "source_name",
+    "Destination": "destination",
+    "Destination Name": "destination_name",
+    "Departure Date & Time": "departure_dt",
+    "Arrival Date & Time": "arrival_dt",
+    "Duration (hrs)": "duration_hrs",
+    "Stopovers": "stopovers",
+    "Aircraft Type": "aircraft_type",
+    "Class": "class",
+    "Booking Source": "booking_source",
+    "Base Fare (BDT)": "base_fare",
+    "Tax & Surcharge (BDT)": "tax_surcharge",
+    "Total Fare (BDT)": "total_fare",
+    "Seasonality": "seasonality",
+    "Days Before Departure": "days_before_departure",
+}
+
 REGULAR_SEASON_LABEL = "Regular"
 
 # --- KPI / transform settings ----------------------------------------------------
